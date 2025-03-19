@@ -11,14 +11,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 from itertools import chain
+import glob
 
 # Previous Boost CNN with the goal of regressing the boost of an AtoGG decay
 # Importing information from csv file with each row = label, eta, phi, 15x15 flattened pixel image
 
 class CustomDataset(Dataset):
-    def __init__(self, data, labels):
+    def __init__(self, data, labels, transform=None):
         self.data = data
         self.labels = labels
+        # self.labels = (labels - labels.mean()) / labels.std()
+        self.transform = transform
 
     def __len__(self):
         return len(self.data)
@@ -31,10 +34,12 @@ class CustomDataset(Dataset):
 def get_tensor_inputs_labels(arg):
     labels = []
     inputs = []
+    etas = []
     with open(arg) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
             labels.append(float(row[0]))
+            etas.append((float(row[1])*6) - 3)
             tempinput = []
             for i in range(3, len(row)):
                 tempinput.append(float(row[i]))
@@ -55,7 +60,7 @@ def get_tensor_inputs_labels(arg):
     # target_mean, target_std = tensor_labels.mean(), tensor_labels.std()
     # tensor_labels_norm = (tensor_labels - target_mean) / target_std
 
-    return tensor_labels, reshaped_tensor_inputs, numevents#, target_std, target_mean
+    return tensor_labels, reshaped_tensor_inputs, numevents, etas#, target_std, target_mean
 
 datasets = []
 numevents_tracker = []
@@ -63,15 +68,21 @@ numevents_tracker = []
 # mean_tracker = []
 labels_tracker = []
 inputs_tracker = []
+etas_tracker = []
 argument_tracker = 0
 totaleventcounter = 0
 
-for arg in sys.argv[1:]:
+file_dir = str(sys.argv[1])
+print(file_dir)
+csv_files = glob.glob(f"{file_dir}/*.csv")
+
+for arg in reversed(csv_files):
     argument_tracker += 1
-    arg_labels, arg_inputs, arg_numevents = get_tensor_inputs_labels(arg)
+    arg_labels, arg_inputs, arg_numevents, arg_etas = get_tensor_inputs_labels(arg)
     totaleventcounter += arg_numevents
     labels_tracker.append(arg_labels)
     inputs_tracker.append(arg_inputs)
+    etas_tracker.append(arg_etas)
     # datasets.append(CustomDataset(arg_inputs, arg_labels))
     numevents_tracker.append(arg_numevents)
     # std_tracker.append(arg_std)
@@ -85,13 +96,37 @@ target_mean, target_std = flattened.unsqueeze(0).mean(), flattened.unsqueeze(0).
 # norm_labels_tracker = (flattened - target_mean) / target_std
 # norm_labels_list = norm_labels_tracker.tolist()
 norm_labels_tracker = [(t-target_mean)/target_std for t in labels_tracker]
+# norm_labels_tracker = [np.log(np.asarray(t)) for t in labels_tracker]
+# norm_labels_tracker = np.log(labels_tracker)
 # print(argument_tracker)
 print(target_mean, target_std)
 # print(norm_labels_tracker.mean())  # Should be ~0
 # print(norm_labels_tracker.std())   # Should be ~1
 
+class MinMaxNormalize:
+    def __init__(self):
+        pass
+    
+    def __call__(self, image):
+        # Convert the image to a tensor
+        image_tensor = transforms.ToTensor()(image)
+        
+        # Normalize the image using min-max normalization
+        min_val = image_tensor.min()
+        max_val = image_tensor.max()
+        
+        # Apply min-max normalization to scale to [0, 1]
+        normalized_image = (image_tensor - min_val) / (max_val - min_val)
+        
+        return normalized_image
+
+
+transform = transforms.Compose([
+    MinMaxNormalize()
+])
+
 for i in range(argument_tracker):
-    datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i]))
+    datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i]))#, transform=transform))
 
 trains = []
 vals = []
@@ -172,41 +207,43 @@ def init_weights(m):
 model.apply(init_weights)
 
 # Training Loop
-nb_epochs = 120
+nb_epochs = 40
 traininglosses = []
 validationlosses = []
 for epoch in range(nb_epochs):
     model.train()
     # running_loss = 0.0
     losses = list()
-    for images, labels in chain(*trains):  # Use your dataset loader
-        images, labels = images, labels
-        # print(images.unsqueeze(1).shape)
+    for loader in trains:
+        for images, labels in loader:  # Use your dataset loader
+            images, labels = images, labels
+            # print(images.unsqueeze(1).shape)
 
-        optimizer.zero_grad()
-        outputs = model(images.unsqueeze(1))
-        loss = criterion(outputs, labels.view(-1, 1))  # Ensure proper shape
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+            optimizer.zero_grad()
+            outputs = model(images.unsqueeze(1))
+            loss = criterion(outputs, labels.view(-1, 1))  # Ensure proper shape
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
-        # running_loss += loss.item()
-        losses.append(loss.item())
+            # running_loss += loss.item()
+            losses.append(loss.item())
 
     # print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}")
     print(f'Epoch {epoch +1}, training loss: {torch.tensor(losses).mean():.2f}')
     traininglosses.append(torch.tensor(losses).mean())
 
     losses = list()
-    for images, labels in chain(*vals): 
-        # 1. forward
-        with torch.no_grad():
-            l = model(images.unsqueeze(1)) 
+    for loader in vals:
+        for images, labels in loader: 
+            # 1. forward
+            with torch.no_grad():
+                l = model(images.unsqueeze(1)) 
 
-        #2. compute the objective function
-        loss = criterion(l, labels.view(-1, 1)) 
+            #2. compute the objective function
+            loss = criterion(l, labels.view(-1, 1)) 
 
-        losses.append(loss.item())
+            losses.append(loss.item())
 
     print(f'Epoch {epoch +1}, validation loss: {torch.tensor(losses).mean():.2f}')
     validationlosses.append(torch.tensor(losses).mean())
@@ -224,9 +261,11 @@ with torch.no_grad():
             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
-                if 0 < outputs[j].item() < 1500:
+                # if 0 < outputs[j].item() < 1500:
                     x_train.append(test_labels[j].item())
                     y_train.append(outputs[j].item())
+        # if i == 0:
+        #     break
 
 x_val = []
 y_val = []
@@ -240,9 +279,11 @@ with torch.no_grad():
             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
-                if 0 < outputs[j].item() < 1500:
+                # if 0 < outputs[j].item() < 1500:
                     x_val.append(test_labels[j].item())
                     y_val.append(outputs[j].item())
+        # if i == 0:
+        #     break
 
 # # predicted - true /true
 plt.figure(1)
@@ -260,6 +301,31 @@ plt.xlabel('True Boost')
 plt.ylabel('Predicted Boost')
 plt.title('True vs. Predicted Boost for Previous Boost CNN (Validation Data)')
 plt.savefig(f"ValPredTrueBoost.pdf")
+
+# flattened_inputs_tracker = [item for sublist in inputs_tracker for item in sublist]
+# inputs_array = np.array(flattened_inputs_tracker, dtype=np.float32)
+# inputs_tracker_tensor = torch.tensor(inputs_array).unsqueeze(1)
+# print(inputs_tracker_tensor.shape)
+# norm_predictions_tracker = model(inputs_tracker_tensor)
+# predictions = (norm_predictions_tracker * target_std) + target_mean
+
+# flattened_labels_tracker = [item for sublist in labels_tracker for item in sublist]
+# print(len(flattened_labels_tracker))
+# # norm_predictions_list = norm_predictions_tracker.tolist()
+# hist_weight_train = []
+# for i in range(len(flattened_labels_tracker)):
+#     true = flattened_labels_tracker[i].item()
+#     hist_weight_train.append((predictions[i].item() - true) / true)
+
+# plt.figure(5)
+# x_range = (100, max(flattened_labels_tracker))
+# binset = [np.linspace(x_range[0], x_range[1], 30), 30]
+# plt.hist2d(flattened_labels_tracker, [item for sublist in etas_tracker for item in sublist], bins=binset, weights=hist_weight_train, cmap='plasma')
+# plt.colorbar(label='(Pred-True)/True')
+# plt.xlabel('Boost')
+# plt.ylabel('Eta')
+# plt.title('2D Histogram')
+# plt.savefig(f"Test2DHist.pdf")
 
 print(f"Printing Epochs={nb_epochs} plots.")
 # Training Losses plot

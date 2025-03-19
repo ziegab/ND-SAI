@@ -47,53 +47,66 @@ def get_tensor_inputs_labels(arg):
     # Pair elements together and shuffle
     combined = list(zip(labels, inputs))
     random.shuffle(combined)
+    split_idx = int(len(combined) * 0.7)
+    # print(split_idx)
+    train_combined = combined[:split_idx]
+    val_combined = combined[split_idx:]
     # Unzip back into separate lists
-    labels, inputs = zip(*combined)
+    train_labels, train_inputs = zip(*train_combined)
+    val_labels, val_inputs = zip(*val_combined)
     # Convert back to lists (since zip() returns tuples)
-    labels = list(labels)
-    inputs = list(inputs)
-    tensor_labels = torch.tensor(labels, dtype=torch.float32)
-    tensor_inputs = torch.tensor(inputs, dtype=torch.float32)
-    reshaped_tensor_inputs = [t.view(15,15) for t in tensor_inputs]
+    train_labels = list(train_labels)
+    train_inputs = list(train_inputs)
+    val_labels = list(val_labels)
+    val_inputs = list(val_inputs)
+    tensor_train_labels = torch.tensor(train_labels, dtype=torch.float32)
+    tensor_train_inputs = torch.stack([torch.tensor(t, dtype=torch.float32) for t in train_inputs])
+    tensor_val_labels = torch.tensor(val_labels, dtype=torch.float32)
+    tensor_val_inputs = torch.stack([torch.tensor(v, dtype=torch.float32) for v in val_inputs])
+    reshaped_tensor_train_inputs = torch.stack([t.view(15,15) for t in tensor_train_inputs])
+    reshaped_tensor_val_inputs = torch.stack([t.view(15,15) for t in tensor_val_inputs])
     # print(reshaped_tensor_inputs[0].shape)
-    # target_mean, target_std = tensor_labels.mean(), tensor_labels.std()
-    # tensor_labels_norm = (tensor_labels - target_mean) / target_std
+    # print(f"Train Inputs Shape: {reshaped_tensor_train_inputs.shape}")  # Expected: (train_size, 15, 15)
+    # print(f"Val Inputs Shape: {reshaped_tensor_val_inputs.shape}")      # Expected: (val_size, 15, 15)
+    # print(isinstance(tensor_train_labels, torch.Tensor), isinstance(tensor_val_labels, torch.Tensor), isinstance(reshaped_tensor_train_inputs, torch.Tensor), isinstance(reshaped_tensor_val_inputs, torch.Tensor))
+    return tensor_train_labels, tensor_val_labels, reshaped_tensor_train_inputs, reshaped_tensor_val_inputs#, numevents, etas#, target_std, target_mean
 
-    return tensor_labels, reshaped_tensor_inputs, numevents, etas#, target_std, target_mean
-
-datasets = []
 numevents_tracker = []
 # std_tracker = []
 # mean_tracker = []
-labels_tracker = []
-inputs_tracker = []
+labels_train_tracker = []
+labels_val_tracker = []
+inputs_train_tracker = []
+inputs_val_tracker = []
 etas_tracker = []
 argument_tracker = 0
-totaleventcounter = 0
+# totaleventcounter = 0
 
 file_dir = str(sys.argv[1])
 print(file_dir)
 csv_files = glob.glob(f"{file_dir}/*.csv")
 
-for arg in reversed(csv_files):
+for arg in csv_files:
     argument_tracker += 1
-    arg_labels, arg_inputs, arg_numevents, arg_etas = get_tensor_inputs_labels(arg)
-    totaleventcounter += arg_numevents
-    labels_tracker.append(arg_labels)
-    inputs_tracker.append(arg_inputs)
-    etas_tracker.append(arg_etas)
+    arg_train_labels, arg_val_labels, arg_train_inputs, arg_val_inputs = get_tensor_inputs_labels(arg)
+    labels_train_tracker.append(arg_train_labels)
+    labels_val_tracker.append(arg_val_labels)
+    inputs_train_tracker.append(arg_train_inputs)
+    inputs_val_tracker.append(arg_val_inputs)
+    # etas_tracker.append(arg_etas)
     # datasets.append(CustomDataset(arg_inputs, arg_labels))
-    numevents_tracker.append(arg_numevents)
+    # numevents_tracker.append(arg_numevents)
     # std_tracker.append(arg_std)
     # mean_tracker.append(arg_mean)
     # break
 
-print(totaleventcounter)
+# print(totaleventcounter)
 
 # flattened = [x for sublist in arg_labels for x in sublist]
-flattened = torch.cat(labels_tracker)
+flattened = torch.cat(labels_train_tracker)
 target_mean, target_std = flattened.mean(), flattened.std()
-norm_labels_tracker = [(t-target_mean)/target_std for t in labels_tracker]
+norm_labels_train_tracker = [(t-target_mean)/target_std for t in labels_train_tracker]
+norm_labels_val_tracker = [(t-target_mean)/target_std for t in labels_val_tracker]
 print(target_mean, target_std)
 # min_flat, max_flat = flattened.min(), flattened.max()
 # norm_labels_tracker = [(t-min_flat)/(max_flat-min_flat) for t in labels_tracker]
@@ -121,19 +134,30 @@ transform = transforms.Compose([
     MinMaxNormalize()
 ])
 
-for i in range(argument_tracker):
-    datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i]))#, transform=transform))
+# for i in range(argument_tracker):
+#     datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i], transform=transform))
 
-trains = []
-vals = []
+# inputs_train_flat = torch.cat([torch.cat(inputs) for inputs in inputs_train_tracker])
+# # norm_labels_train_flat = torch.cat([torch.cat(labels) for labels in norm_labels_train_tracker])
+# inputs_val_flat = torch.cat([torch.cat(inputs) for inputs in inputs_val_tracker])
+# # norm_labels_val_flat = torch.cat([torch.cat(labels) for labels in norm_labels_val_tracker])
 
-for i, dataset in enumerate(datasets):
-    numevents = numevents_tracker[i]
-    train, val = random_split(dataset, [int(numevents*0.7), numevents-int(numevents*0.7)])
-    train_loader = DataLoader(train, batch_size=32, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val, batch_size=32, shuffle=False, drop_last=True)
-    trains.append(train_loader)
-    vals.append(val_loader)
+train_dataset = CustomDataset(torch.cat(inputs_train_tracker), torch.cat(norm_labels_train_tracker), transform=transform)
+val_dataset = CustomDataset(torch.cat(inputs_val_tracker), torch.cat(norm_labels_val_tracker), transform=transform)
+
+# trains = []
+# vals = []
+
+# for i, dataset in enumerate(datasets):
+#     numevents = numevents_tracker[i]
+#     train, val = random_split(dataset, [int(numevents*0.7), numevents-int(numevents*0.7)])
+#     train_loader = DataLoader(train, batch_size=32, shuffle=True, drop_last=True)
+#     val_loader = DataLoader(val, batch_size=32, shuffle=False, drop_last=True)
+#     trains.append(train_loader)
+#     vals.append(val_loader)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, drop_last=True)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, drop_last=True)
 
 class LeNet5(nn.Module):
     def __init__(self):
@@ -192,16 +216,16 @@ def init_weights(m):
 model.apply(init_weights)
 
 # Training Loop
-nb_epochs = 40
+nb_epochs = 60
 traininglosses = []
 validationlosses = []
 for epoch in range(nb_epochs):
     model.train()
     # running_loss = 0.0
     losses = list()
-    for loader in trains:
+    # for loader in trains:
     # for images, labels in chain(*trains):  # Use your dataset loader
-        for images, labels in loader:
+    for images, labels in train_loader:
             images, labels = images, labels
             # print(images.unsqueeze(1).shape)
 
@@ -220,9 +244,9 @@ for epoch in range(nb_epochs):
     traininglosses.append(torch.tensor(losses).mean())
 
     losses = list()
-    for loader in vals:
+    # for loader in vals:
     # for images, labels in chain(*vals): 
-        for images, labels in loader:
+    for images, labels in val_loader:
             # 1. forward
             with torch.no_grad():
                 l = model(images.unsqueeze(1)) 
@@ -239,8 +263,8 @@ model.eval()
 x_train = []
 y_train = []
 with torch.no_grad():
-    for i,loader in enumerate(trains):
-        for test_images, test_labels_norm in loader:
+    # for i,loader in enumerate(trains):
+        for test_images, test_labels_norm in train_loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean
@@ -257,8 +281,8 @@ with torch.no_grad():
 x_val = []
 y_val = []
 with torch.no_grad():
-    for i,loader in enumerate(vals):
-        for test_images, test_labels_norm in loader:
+    # for i,loader in enumerate(vals):
+        for test_images, test_labels_norm in val_loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean

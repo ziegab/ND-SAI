@@ -13,9 +13,6 @@ import random
 from itertools import chain
 import glob
 
-# LeNet CNN with the goal of regressing the boost of an AtoGG decay
-# Importing information from csv file with each row = label, eta, phi, 15x15 flattened pixel image
-
 class CustomDataset(Dataset):
     def __init__(self, data, labels, transform=None):
         self.data = data
@@ -29,47 +26,51 @@ class CustomDataset(Dataset):
         x = self.data[idx]
         y = self.labels[idx]
         return x, y
-
-def get_tensor_inputs_labels(arg):
+    
+def split_train_val(arg):
     labels = []
     inputs = []
     etas = []
     with open(arg) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
+            # print(f"Row: {len(row)}")
             labels.append(float(row[0]))
             etas.append((float(row[1])*6)-3)
             tempinput = []
             for i in range(3, len(row)):
                 tempinput.append(float(row[i]))
+            # print(f"Extracted input: {len(tempinput)}")
             inputs.append(tempinput)
     numevents = len(labels)
     # Pair elements together and shuffle
     combined = list(zip(labels, inputs))
     random.shuffle(combined)
+    split_idx = int(len(combined) * 0.7)
+    # print(split_idx)
+    train_combined = combined[:split_idx]
+    val_combined = combined[split_idx:]
+    # print(f"Length of train_combined: {len(train_combined)}")
+    # print(f"Length of val_combined: {len(val_combined)}")
     # Unzip back into separate lists
-    labels, inputs = zip(*combined)
+    train_labels, train_inputs = zip(*train_combined)
+    val_labels, val_inputs = zip(*val_combined)
     # Convert back to lists (since zip() returns tuples)
-    labels = list(labels)
-    inputs = list(inputs)
-    tensor_labels = torch.tensor(labels, dtype=torch.float32)
-    tensor_inputs = torch.tensor(inputs, dtype=torch.float32)
-    reshaped_tensor_inputs = [t.view(15,15) for t in tensor_inputs]
-    # print(reshaped_tensor_inputs[0].shape)
-    # target_mean, target_std = tensor_labels.mean(), tensor_labels.std()
-    # tensor_labels_norm = (tensor_labels - target_mean) / target_std
+    train_labels = list(train_labels)
+    train_inputs = list(train_inputs)
+    val_labels = list(val_labels)
+    val_inputs = list(val_inputs)
+    # print(len(train_inputs), len(train_labels))
+    tensor_train_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,15,15) for t in train_inputs])
+    tensor_val_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,15,15) for t in val_inputs])
+    return train_labels, val_labels, tensor_train_inputs, tensor_val_inputs
 
-    return tensor_labels, reshaped_tensor_inputs, numevents, etas#, target_std, target_mean
-
-datasets = []
-numevents_tracker = []
-# std_tracker = []
-# mean_tracker = []
-labels_tracker = []
-inputs_tracker = []
+labels_train_tracker = []
+labels_val_tracker = []
+inputs_train_tracker = []
+inputs_val_tracker = []
 etas_tracker = []
 argument_tracker = 0
-totaleventcounter = 0
 
 file_dir = str(sys.argv[1])
 print(file_dir)
@@ -77,27 +78,27 @@ csv_files = glob.glob(f"{file_dir}/*.csv")
 
 for arg in reversed(csv_files):
     argument_tracker += 1
-    arg_labels, arg_inputs, arg_numevents, arg_etas = get_tensor_inputs_labels(arg)
-    totaleventcounter += arg_numevents
-    labels_tracker.append(arg_labels)
-    inputs_tracker.append(arg_inputs)
-    etas_tracker.append(arg_etas)
-    # datasets.append(CustomDataset(arg_inputs, arg_labels))
-    numevents_tracker.append(arg_numevents)
-    # std_tracker.append(arg_std)
-    # mean_tracker.append(arg_mean)
-    # break
+    arg_train_labels, arg_val_labels, arg_train_inputs, arg_val_inputs = split_train_val(arg)
+    labels_train_tracker.append(arg_train_labels)
+    labels_val_tracker.append(arg_val_labels)
+    inputs_train_tracker.append(arg_train_inputs)
+    inputs_val_tracker.append(arg_val_inputs)
+    if argument_tracker == 10:
+        break
 
-print(totaleventcounter)
+tensor_train_inputs = [tensor for sublist in inputs_train_tracker for tensor in sublist]
+tensor_val_inputs = [tensor for sublist in inputs_val_tracker for tensor in sublist]
+tensor_train_labels = [torch.tensor([inner]) for outer in labels_train_tracker for inner in outer]
+tensor_val_labels = [torch.tensor([inner]) for outer in labels_val_tracker for inner in outer]
 
-# flattened = [x for sublist in arg_labels for x in sublist]
-flattened = torch.cat(labels_tracker)
+# print(len(tensor_train_inputs), len(tensor_train_labels))
+
+flattened = torch.cat(tensor_train_labels)
+# print(f"Length of flattened train_labels: {len(flattened)}")
 target_mean, target_std = flattened.mean(), flattened.std()
-norm_labels_tracker = [(t-target_mean)/target_std for t in labels_tracker]
+norm_labels_train_tracker = [(t-target_mean)/target_std for t in tensor_train_labels]
+norm_labels_val_tracker = [(t-target_mean)/target_std for t in tensor_val_labels]
 print(target_mean, target_std)
-# min_flat, max_flat = flattened.min(), flattened.max()
-# norm_labels_tracker = [(t-min_flat)/(max_flat-min_flat) for t in labels_tracker]
-# print(argument_tracker)
 
 class MinMaxNormalize:
     def __init__(self):
@@ -121,19 +122,22 @@ transform = transforms.Compose([
     MinMaxNormalize()
 ])
 
-for i in range(argument_tracker):
-    datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i]))#, transform=transform))
+# for i in range(argument_tracker):
+#     datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i], transform=transform))
 
-trains = []
-vals = []
+# inputs_train_flat = torch.cat([torch.cat(inputs) for inputs in inputs_train_tracker])
+# # norm_labels_train_flat = torch.cat([torch.cat(labels) for labels in norm_labels_train_tracker])
+# inputs_val_flat = torch.cat([torch.cat(inputs) for inputs in inputs_val_tracker])
+# # norm_labels_val_flat = torch.cat([torch.cat(labels) for labels in norm_labels_val_tracker])
 
-for i, dataset in enumerate(datasets):
-    numevents = numevents_tracker[i]
-    train, val = random_split(dataset, [int(numevents*0.7), numevents-int(numevents*0.7)])
-    train_loader = DataLoader(train, batch_size=32, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val, batch_size=32, shuffle=False, drop_last=True)
-    trains.append(train_loader)
-    vals.append(val_loader)
+# print(torch.cat(tensor_train_inputs).shape)
+# print(torch.cat(norm_labels_train_tracker).shape)
+
+train_dataset = CustomDataset(torch.cat(tensor_train_inputs), torch.cat(norm_labels_train_tracker))#, transform=transform)
+val_dataset = CustomDataset(torch.cat(tensor_val_inputs), torch.cat(norm_labels_val_tracker))#, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, drop_last=True)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, drop_last=True)
 
 class LeNet5(nn.Module):
     def __init__(self):
@@ -183,7 +187,7 @@ model = LeNet5()
 
 # Define Loss and Optimizer
 criterion = nn.MSELoss()  # Regression loss function
-optimizer = optim.Adam(model.parameters(), lr=0.0001)
+optimizer = optim.Adam(model.parameters(), lr=0.01)
 def init_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
@@ -199,10 +203,10 @@ for epoch in range(nb_epochs):
     model.train()
     # running_loss = 0.0
     losses = list()
-    for loader in trains:
-    # for images, labels in chain(*trains):  # Use your dataset loader
-        for images, labels in loader:
+    for images, labels in train_loader:
             images, labels = images, labels
+            # print(f'Image batch size: {images.size()}')
+            # print(f'Label batch size: {labels.size()}')
             # print(images.unsqueeze(1).shape)
 
             optimizer.zero_grad()
@@ -220,9 +224,9 @@ for epoch in range(nb_epochs):
     traininglosses.append(torch.tensor(losses).mean())
 
     losses = list()
-    for loader in vals:
+    # for loader in vals:
     # for images, labels in chain(*vals): 
-        for images, labels in loader:
+    for images, labels in val_loader:
             # 1. forward
             with torch.no_grad():
                 l = model(images.unsqueeze(1)) 
@@ -239,8 +243,8 @@ model.eval()
 x_train = []
 y_train = []
 with torch.no_grad():
-    for i,loader in enumerate(trains):
-        for test_images, test_labels_norm in loader:
+    # for i,loader in enumerate(trains):
+        for test_images, test_labels_norm in train_loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean
@@ -257,8 +261,8 @@ with torch.no_grad():
 x_val = []
 y_val = []
 with torch.no_grad():
-    for i,loader in enumerate(vals):
-        for test_images, test_labels_norm in loader:
+    # for i,loader in enumerate(vals):
+        for test_images, test_labels_norm in val_loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean
@@ -314,34 +318,34 @@ plt.savefig(f"ValPredTrueLeNet.pdf")
 # plt.title('2D Histogram')
 # plt.savefig(f"Test2DHist.pdf")
 
-print(f"Printing Epochs={nb_epochs} plots.")
-# Training Losses plot
-nb_epochslist = list(range(0, nb_epochs))
-last_trainloss = traininglosses[-1]
+# print(f"Printing Epochs={nb_epochs} plots.")
+# # Training Losses plot
+# nb_epochslist = list(range(0, nb_epochs))
+# last_trainloss = traininglosses[-1]
 
-plt.figure(3)
-plt.scatter(nb_epochslist, traininglosses, c="orange", alpha=0.5)
-plt.plot([-1, nb_epochs+1], [last_trainloss, last_trainloss], 'p--', label=f'Final Training Loss = {last_trainloss:.2f}', alpha=0.2)
-plt.xlim(0, nb_epochs)
-plt.ylim(0, 1)
-# plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
-plt.xlabel('Epochs')
-plt.ylabel('Training Losses')
-plt.title(f"LeNet CNN")
-plt.legend()
-plt.savefig(f"LeNetepoch{nb_epochs}v1.pdf", format="pdf")
+# plt.figure(3)
+# plt.scatter(nb_epochslist, traininglosses, c="orange", alpha=0.5)
+# plt.plot([-1, nb_epochs+1], [last_trainloss, last_trainloss], 'p--', label=f'Final Training Loss = {last_trainloss:.2f}', alpha=0.2)
+# plt.xlim(0, nb_epochs)
+# plt.ylim(0, 1)
+# # plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
+# plt.xlabel('Epochs')
+# plt.ylabel('Training Losses')
+# plt.title(f"LeNet CNN")
+# plt.legend()
+# plt.savefig(f"LeNetepoch{nb_epochs}v1.pdf", format="pdf")
 
-# Validation Losses plot
+# # Validation Losses plot
 
-last_valloss = validationlosses[-1]
-plt.figure(4)
-plt.scatter(nb_epochslist, validationlosses, c="pink", alpha=0.5)
-plt.plot([-1, nb_epochs+1], [last_valloss, last_valloss], 'p--', label=f'Final Validation Loss = {last_valloss:.2f}', alpha=0.2)
-plt.xlim(0, nb_epochs)
-plt.ylim(0, 1)
-# plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
-plt.xlabel('Epochs')
-plt.ylabel('Validation Losses')
-plt.title(f"LeNet CNN")
-plt.legend()
-plt.savefig(f"ValidationLeNetepoch{nb_epochs}v1.pdf", format="pdf")
+# last_valloss = validationlosses[-1]
+# plt.figure(4)
+# plt.scatter(nb_epochslist, validationlosses, c="pink", alpha=0.5)
+# plt.plot([-1, nb_epochs+1], [last_valloss, last_valloss], 'p--', label=f'Final Validation Loss = {last_valloss:.2f}', alpha=0.2)
+# plt.xlim(0, nb_epochs)
+# plt.ylim(0, 1)
+# # plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
+# plt.xlabel('Epochs')
+# plt.ylabel('Validation Losses')
+# plt.title(f"LeNet CNN")
+# plt.legend()
+# plt.savefig(f"ValidationLeNetepoch{nb_epochs}v1.pdf", format="pdf")
