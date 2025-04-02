@@ -12,6 +12,7 @@ import numpy as np
 import random
 from itertools import chain
 import glob
+from pprint import pprint
 
 class CustomDataset(Dataset):
     def __init__(self, data, labels, transform=None):
@@ -35,13 +36,14 @@ def split_train_val(arg):
         reader = csv.reader(csvfile)
         for row in reader:
             # print(f"Row: {len(row)}")
-            labels.append(float(row[0]))
-            etas.append((float(row[1])*6)-3)
-            tempinput = []
-            for i in range(3, len(row)):
-                tempinput.append(float(row[i]))
-            # print(f"Extracted input: {len(tempinput)}")
-            inputs.append(tempinput)
+            # if 200 < float(row[0]) < 700:
+                labels.append(float(row[0]))
+                etas.append((float(row[2])*6)-3)
+                tempinput = []
+                for i in range(4, len(row)):
+                    tempinput.append(float(row[i]))
+                # print(f"Extracted input: {len(tempinput)}")
+                inputs.append(tempinput)
     numevents = len(labels)
     # Pair elements together and shuffle
     combined = list(zip(labels, inputs))
@@ -61,44 +63,99 @@ def split_train_val(arg):
     val_labels = list(val_labels)
     val_inputs = list(val_inputs)
     # print(len(train_inputs), len(train_labels))
-    tensor_train_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,15,15) for t in train_inputs])
-    tensor_val_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,15,15) for t in val_inputs])
+    tensor_train_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,input_size,input_size) for t in train_inputs])
+    tensor_val_inputs = torch.stack([torch.tensor(t, dtype=torch.float32).view(1,input_size,input_size) for t in val_inputs])
     return train_labels, val_labels, tensor_train_inputs, tensor_val_inputs
+
+def get_tensor_inputs_labels(arg):
+    labels = []
+    inputs = []
+    etas = []
+    with open(arg) as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            # if 200 < float(row[0]) < 700:
+                labels.append(float(row[0]))
+                etas.append((float(row[2])*6)-3)
+                tempinput = []
+                for i in range(4, len(row)):
+                    tempinput.append(float(row[i]))
+                inputs.append(tempinput)
+    numevents = len(labels)
+    # Pair elements together and shuffle
+    combined = list(zip(labels, inputs))
+    random.shuffle(combined)
+    # Unzip back into separate lists
+    labels, inputs = zip(*combined)
+    # Convert back to lists (since zip() returns tuples)
+    labels = list(labels)
+    inputs = list(inputs)
+    tensor_labels = torch.tensor(labels, dtype=torch.float32)
+    tensor_inputs = torch.tensor(inputs, dtype=torch.float32)
+    reshaped_tensor_inputs = [t.view(input_size,input_size) for t in tensor_inputs]
+    # print(reshaped_tensor_inputs[0].shape)
+    # target_mean, target_std = tensor_labels.mean(), tensor_labels.std()
+    # tensor_labels_norm = (tensor_labels - target_mean) / target_std
+
+    return tensor_labels, reshaped_tensor_inputs, numevents, etas#, target_std, target_mean
+
+datasets = []
+numevents_tracker = []
+# std_tracker = []
+# mean_tracker = []
+labels_tracker = []
+inputs_tracker = []
+etas_tracker = []
+# argument_tracker = 0
+totaleventcounter = 0
 
 labels_train_tracker = []
 labels_val_tracker = []
 inputs_train_tracker = []
 inputs_val_tracker = []
-etas_tracker = []
+# etas_tracker = []
 argument_tracker = 0
 
 file_dir = str(sys.argv[1])
 print(file_dir)
 csv_files = glob.glob(f"{file_dir}/*.csv")
 
-for arg in reversed(csv_files):
+input_size = 32
+
+for arg in (csv_files):
     argument_tracker += 1
+    arg_labels, arg_inputs, arg_numevents, arg_etas = get_tensor_inputs_labels(arg)
+    totaleventcounter += arg_numevents
+    labels_tracker.append(arg_labels)
+    inputs_tracker.append(arg_inputs)
+    etas_tracker.append(arg_etas)
+    # datasets.append(CustomDataset(arg_inputs, arg_labels))
+    numevents_tracker.append(arg_numevents)
     arg_train_labels, arg_val_labels, arg_train_inputs, arg_val_inputs = split_train_val(arg)
     labels_train_tracker.append(arg_train_labels)
     labels_val_tracker.append(arg_val_labels)
     inputs_train_tracker.append(arg_train_inputs)
     inputs_val_tracker.append(arg_val_inputs)
-    if argument_tracker == 3:
-        break
+    # if argument_tracker == 11:
+    #     break
 
+# pprint(labels_train_tracker)
 tensor_train_inputs = [tensor for sublist in inputs_train_tracker for tensor in sublist]
 tensor_val_inputs = [tensor for sublist in inputs_val_tracker for tensor in sublist]
 tensor_train_labels = [torch.tensor([inner]) for outer in labels_train_tracker for inner in outer]
+# pprint(tensor_train_labels)
 tensor_val_labels = [torch.tensor([inner]) for outer in labels_val_tracker for inner in outer]
 
 # print(len(tensor_train_inputs), len(tensor_train_labels))
 
 flattened = torch.cat(tensor_train_labels)
-# print(f"Length of flattened train_labels: {len(flattened)}")
+print(f"Length of flattened train_labels: {len(flattened)}")
 target_mean, target_std = flattened.mean(), flattened.std()
 norm_labels_train_tracker = [(t-target_mean)/target_std for t in tensor_train_labels]
+# pprint(norm_labels_train_tracker)
 norm_labels_val_tracker = [(t-target_mean)/target_std for t in tensor_val_labels]
 print(target_mean, target_std)
+norm_labels_tracker = [(t-target_mean)/target_std for t in labels_tracker]
 
 class MinMaxNormalize:
     def __init__(self):
@@ -130,6 +187,20 @@ transform = transforms.Compose([
 # inputs_val_flat = torch.cat([torch.cat(inputs) for inputs in inputs_val_tracker])
 # # norm_labels_val_flat = torch.cat([torch.cat(labels) for labels in norm_labels_val_tracker])
 
+for i in range(argument_tracker):
+    datasets.append(CustomDataset(inputs_tracker[i], norm_labels_tracker[i]))#, transform=transform))
+
+trains = []
+vals = []
+
+for i, dataset in enumerate(datasets):
+    numevents = numevents_tracker[i]
+    train, val = random_split(dataset, [int(numevents*0.7), numevents-int(numevents*0.7)])
+    train_loader_group = DataLoader(train, batch_size=32, shuffle=True, drop_last=True)
+    val_loader_group = DataLoader(val, batch_size=32, shuffle=False, drop_last=True)
+    trains.append(train_loader_group)
+    vals.append(val_loader_group)
+
 combined_tensors = list(zip(norm_labels_train_tracker, tensor_train_inputs))
 random.shuffle(combined_tensors)
 norm_labels_train_tracker, tensor_train_inputs = map(list, zip(*combined_tensors))
@@ -146,28 +217,30 @@ val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, drop_last=Tru
 class LeNet5(nn.Module):
     def __init__(self):
         super(LeNet5, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=2)  # 15x15 -> 15x15
+        self.conv1 = nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=2)  # 32x32 -> 32x32
         self.bn1 = nn.BatchNorm2d(6)
-        self.pool1 = nn.AvgPool2d(kernel_size=2, stride=2)  # 15x15 -> 7x7
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=1)  # 7x7 -> 3x3
+        self.pool1 = nn.AvgPool2d(kernel_size=2, stride=2)  # 32x32 -> 16x16
+        self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=1)  # 16x16 -> 12x12
         self.bn2 = nn.BatchNorm2d(16)
-        self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)  # 3x3 -> 1x1
-        self.fc1 = nn.Linear(16 * 1 * 1, 120)  # Fully connected
+        self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)  # 12x12 -> 6x6
+        self.fc1 = nn.Linear(16 * 6 * 6, 120)  # Fully connected
         self.bn3 = nn.BatchNorm1d(120)
         self.fc2 = nn.Linear(120, 84)
         self.bn4 = nn.BatchNorm1d(84)
         self.fc3 = nn.Linear(84, 1) 
 
+        self.leaky_relu = nn.LeakyReLU(negative_slope=0.01)
+
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.leaky_relu(self.bn1(self.conv1(x)))
         # x = self.pool1(x)
         x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.leaky_relu(self.bn2(self.conv2(x)))
         # x = self.pool2(x)
         x = F.max_pool2d(x, 2, 2)
         x = torch.flatten(x, 1)  # Flatten for FC layers
-        x = F.relu(self.bn3(self.fc1(x)))
-        x = F.relu(self.bn4(self.fc2(x)))
+        x = F.leaky_relu(self.bn3(self.fc1(x)))
+        x = F.leaky_relu(self.bn4(self.fc2(x)))
         x = self.fc3(x)  # No activation (logits)
 
         # x = F.relu((self.conv1(x)))
@@ -189,13 +262,24 @@ class LeNet5(nn.Module):
 # Instantiate the model
 model = LeNet5()
 
+class LogMSELoss(nn.Module):
+    def forward(self, y_pred, y_true):
+        return torch.mean(torch.log1p((y_pred - y_true) ** 2))
+    
+class LogCoshLoss(nn.Module):
+    def forward(self, y_pred, y_true):
+        return torch.mean(torch.log(torch.cosh(y_pred - y_true)))
+
 # Define Loss and Optimizer
 criterion = nn.MSELoss()  # Regression loss function
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+# criterion = LogCoshLoss()
+# criterion = nn.SmoothL1Loss(beta=10.0)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 def init_weights(m):
-    if isinstance(m, nn.Linear):
-        nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
-        nn.init.zeros_(m.bias)  # Ensure biases start at zero
+    if isinstance(m, (nn.Linear, nn.Conv2d)):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)  # Ensure biases start at zero
 
 model.apply(init_weights)
 
@@ -244,11 +328,51 @@ for epoch in range(nb_epochs):
     validationlosses.append(torch.tensor(losses).mean())
 
 model.eval()
+# # all labels together
+# x_train = []
+# y_train = []
+# with torch.no_grad():
+#     # for i,loader in enumerate(trains):
+#         for test_images, test_labels_norm in train_loader:
+#             test_labels_norm = test_labels_norm.unsqueeze(1)
+#             outputs_norm = model(test_images.unsqueeze(1))
+#             outputs = (outputs_norm * target_std) + target_mean
+#             test_labels = (test_labels_norm * target_std) + target_mean
+#             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
+#             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
+#             for j in range(32):
+#                 # if 0 < outputs[j].item() < 1500:
+#                     x_train.append(test_labels[j].item())
+#                     y_train.append(outputs[j].item())
+#         # if i == 0:
+#         #     break
+
+# x_val = []
+# y_val = []
+# with torch.no_grad():
+#     # for i,loader in enumerate(vals):
+#         for test_images, test_labels_norm in val_loader:
+#             test_labels_norm = test_labels_norm.unsqueeze(1)
+#             outputs_norm = model(test_images.unsqueeze(1))
+#             outputs = (outputs_norm * target_std) + target_mean
+#             test_labels = (test_labels_norm * target_std) + target_mean
+#             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
+#             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
+#             for j in range(32):
+#                 # if 0 < outputs[j].item() < 1500:
+#                     x_val.append(test_labels[j].item())
+#                     y_val.append(outputs[j].item())
+#         # if i == 0:
+#         #     break
+
+# labels grouped by mass point
 x_train = []
 y_train = []
 with torch.no_grad():
-    # for i,loader in enumerate(trains):
-        for test_images, test_labels_norm in train_loader:
+    for i,loader in enumerate(trains):
+        x_train_temp = []
+        y_train_temp = []
+        for test_images, test_labels_norm in loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean
@@ -257,16 +381,20 @@ with torch.no_grad():
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
                 if 0 < outputs[j].item() < 1500:
-                    x_train.append(test_labels[j].item())
-                    y_train.append(outputs[j].item())
+                    x_train_temp.append(test_labels[j].item())
+                    y_train_temp.append(outputs[j].item())
+        x_train.append(x_train_temp)
+        y_train.append(y_train_temp)
         # if i == 0:
         #     break
 
 x_val = []
 y_val = []
 with torch.no_grad():
-    # for i,loader in enumerate(vals):
-        for test_images, test_labels_norm in val_loader:
+    for i,loader in enumerate(vals):
+        x_val_temp = []
+        y_val_temp = []
+        for test_images, test_labels_norm in loader:
             test_labels_norm = test_labels_norm.unsqueeze(1)
             outputs_norm = model(test_images.unsqueeze(1))
             outputs = (outputs_norm * target_std) + target_mean
@@ -275,27 +403,59 @@ with torch.no_grad():
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
                 if 0 < outputs[j].item() < 1500:
-                    x_val.append(test_labels[j].item())
-                    y_val.append(outputs[j].item())
+                    x_val_temp.append(test_labels[j].item())
+                    y_val_temp.append(outputs[j].item())
+        x_val.append(x_val_temp)
+        y_val.append(y_val_temp)
         # if i == 0:
         #     break
 
-# # predicted - true /true
+# # all labels together
+# # # predicted - true /true
+# plt.figure(1)
+# plt.scatter(x_train, y_train, c='blue', alpha=0.6, s=1)
+# plt.plot([0.05, 0.25], [0.05, 0.25], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+# # plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+# plt.xlabel('True Boost')
+# plt.ylabel('Predicted Boost')
+# plt.title('True vs. Predicted Boost for LeNet CNN (Training Data)')
+# plt.savefig(f"TrainPredTrueLeNetMass.pdf")
+
+# plt.figure(2)
+# plt.scatter(x_val, y_val, c='blue', alpha=0.6, s=1)
+# plt.plot([0.05, 0.25], [0.05, 0.25], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+# # plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+# plt.xlabel('True Boost')
+# plt.ylabel('Predicted Boost')
+# plt.title('True vs. Predicted Boost for LeNet CNN (Validation Data)')
+# plt.savefig(f"ValPredTrueLeNetMass.pdf")
+
+print(len(x_train), len(x_val))
+
+# labels grouped by mass point
+colors_train = plt.cm.viridis(np.linspace(0, 1, len(x_train)))
+colors_val = plt.cm.viridis(np.linspace(0, 1, len(x_val)))
 plt.figure(1)
-plt.scatter(x_train, y_train, c='blue', alpha=0.6, s=1)
+for i in range(len(x_train)):
+    plt.scatter(x_train[i], y_train[i], color=colors_train[i], label=f'Mass Point {i+1}', alpha=0.6, s=1)
+# plt.plot([0.05, 0.25], [0.05, 0.25], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.xlabel('True Boost')
 plt.ylabel('Predicted Boost')
+# plt.legend()
 plt.title('True vs. Predicted Boost for LeNet CNN (Training Data)')
-plt.savefig(f"TrainPredTrueLeNet.pdf")
+plt.savefig(f"TrainPredTrueLeNetMass.pdf")
 
 plt.figure(2)
-plt.scatter(x_val, y_val, c='blue', alpha=0.6, s=1)
+for i in range(len(x_val)):
+    plt.scatter(x_val[i], y_val[i], color=colors_val[i], label=f'Mass Point {i+1}', alpha=0.6, s=1)
+# plt.plot([0.05, 0.25], [0.05, 0.25], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.xlabel('True Boost')
 plt.ylabel('Predicted Boost')
+# plt.legend()
 plt.title('True vs. Predicted Boost for LeNet CNN (Validation Data)')
-plt.savefig(f"ValPredTrueLeNet.pdf")
+plt.savefig(f"ValPredTrueLeNetMass.pdf")
 
 # flattened_inputs_tracker = [item for sublist in inputs_tracker for item in sublist]
 # inputs_array = np.array(flattened_inputs_tracker, dtype=np.float32)
@@ -322,34 +482,34 @@ plt.savefig(f"ValPredTrueLeNet.pdf")
 # plt.title('2D Histogram')
 # plt.savefig(f"Test2DHist.pdf")
 
-# print(f"Printing Epochs={nb_epochs} plots.")
-# # Training Losses plot
-# nb_epochslist = list(range(0, nb_epochs))
-# last_trainloss = traininglosses[-1]
+print(f"Printing Epochs={nb_epochs} plots.")
+# Training Losses plot
+nb_epochslist = list(range(0, nb_epochs))
+last_trainloss = traininglosses[-1]
 
-# plt.figure(3)
-# plt.scatter(nb_epochslist, traininglosses, c="orange", alpha=0.5)
-# plt.plot([-1, nb_epochs+1], [last_trainloss, last_trainloss], 'p--', label=f'Final Training Loss = {last_trainloss:.2f}', alpha=0.2)
-# plt.xlim(0, nb_epochs)
-# plt.ylim(0, 1)
-# # plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
-# plt.xlabel('Epochs')
-# plt.ylabel('Training Losses')
-# plt.title(f"LeNet CNN")
-# plt.legend()
-# plt.savefig(f"LeNetepoch{nb_epochs}v1.pdf", format="pdf")
+plt.figure(3)
+plt.scatter(nb_epochslist, traininglosses, c="orange", alpha=0.5)
+plt.plot([-1, nb_epochs+1], [last_trainloss, last_trainloss], 'p--', label=f'Final Training Loss = {last_trainloss:.2f}', alpha=0.2)
+plt.xlim(0, nb_epochs)
+plt.ylim(0, 1)
+# plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
+plt.xlabel('Epochs')
+plt.ylabel('Training Losses')
+plt.title(f"LeNet CNN")
+plt.legend()
+plt.savefig(f"LeNetepoch{nb_epochs}v1.pdf", format="pdf")
 
-# # Validation Losses plot
+# Validation Losses plot
 
-# last_valloss = validationlosses[-1]
-# plt.figure(4)
-# plt.scatter(nb_epochslist, validationlosses, c="pink", alpha=0.5)
-# plt.plot([-1, nb_epochs+1], [last_valloss, last_valloss], 'p--', label=f'Final Validation Loss = {last_valloss:.2f}', alpha=0.2)
-# plt.xlim(0, nb_epochs)
-# plt.ylim(0, 1)
-# # plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
-# plt.xlabel('Epochs')
-# plt.ylabel('Validation Losses')
-# plt.title(f"LeNet CNN")
-# plt.legend()
-# plt.savefig(f"ValidationLeNetepoch{nb_epochs}v1.pdf", format="pdf")
+last_valloss = validationlosses[-1]
+plt.figure(4)
+plt.scatter(nb_epochslist, validationlosses, c="pink", alpha=0.5)
+plt.plot([-1, nb_epochs+1], [last_valloss, last_valloss], 'p--', label=f'Final Validation Loss = {last_valloss:.2f}', alpha=0.2)
+plt.xlim(0, nb_epochs)
+plt.ylim(0, 1)
+# plt.plot([0,nb_epochs], [0, 1], color='black', linestyle='-', linewidth=1, label='Training Losses ')
+plt.xlabel('Epochs')
+plt.ylabel('Validation Losses')
+plt.title(f"LeNet CNN")
+plt.legend()
+plt.savefig(f"ValidationLeNetepoch{nb_epochs}v1.pdf", format="pdf")

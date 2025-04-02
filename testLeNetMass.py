@@ -35,10 +35,10 @@ def split_train_val(arg):
         reader = csv.reader(csvfile)
         for row in reader:
             # print(f"Row: {len(row)}")
-            labels.append(float(row[0]))
-            etas.append((float(row[1])*6)-3)
+            labels.append(float(row[1]))
+            etas.append((float(row[2])*6)-3)
             tempinput = []
-            for i in range(3, len(row)):
+            for i in range(4, len(row)):
                 tempinput.append(float(row[i]))
             # print(f"Extracted input: {len(tempinput)}")
             inputs.append(tempinput)
@@ -76,15 +76,15 @@ file_dir = str(sys.argv[1])
 print(file_dir)
 csv_files = glob.glob(f"{file_dir}/*.csv")
 
-for arg in reversed(csv_files):
+for arg in (csv_files):
     argument_tracker += 1
     arg_train_labels, arg_val_labels, arg_train_inputs, arg_val_inputs = split_train_val(arg)
     labels_train_tracker.append(arg_train_labels)
     labels_val_tracker.append(arg_val_labels)
     inputs_train_tracker.append(arg_train_inputs)
     inputs_val_tracker.append(arg_val_inputs)
-    if argument_tracker == 3:
-        break
+    # if argument_tracker == 3:
+    #     break
 
 tensor_train_inputs = [tensor for sublist in inputs_train_tracker for tensor in sublist]
 tensor_val_inputs = [tensor for sublist in inputs_val_tracker for tensor in sublist]
@@ -256,7 +256,7 @@ with torch.no_grad():
             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
-                if 0 < outputs[j].item() < 1500:
+                # if 0 < outputs[j].item() < 1500:
                     x_train.append(test_labels[j].item())
                     y_train.append(outputs[j].item())
         # if i == 0:
@@ -274,7 +274,7 @@ with torch.no_grad():
             # print("Target range:", torch.min(test_labels), torch.max(test_labels))
             # print("Prediction range:", torch.min(outputs), torch.max(outputs))
             for j in range(32):
-                if 0 < outputs[j].item() < 1500:
+                # if 0 < outputs[j].item() < 1500:
                     x_val.append(test_labels[j].item())
                     y_val.append(outputs[j].item())
         # if i == 0:
@@ -283,19 +283,19 @@ with torch.no_grad():
 # # predicted - true /true
 plt.figure(1)
 plt.scatter(x_train, y_train, c='blue', alpha=0.6, s=1)
-plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+plt.plot([0, 1], [0, 1], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.xlabel('True Boost')
 plt.ylabel('Predicted Boost')
 plt.title('True vs. Predicted Boost for LeNet CNN (Training Data)')
-plt.savefig(f"TrainPredTrueLeNet.pdf")
+plt.savefig(f"TrainPredTrueLeNetMass.pdf")
 
 plt.figure(2)
 plt.scatter(x_val, y_val, c='blue', alpha=0.6, s=1)
-plt.plot([0, 1000], [0, 1000], color='black', linestyle='-', linewidth=1, label='Predicted = True')
+plt.plot([0, 1], [0, 1], color='black', linestyle='-', linewidth=1, label='Predicted = True')
 plt.xlabel('True Boost')
 plt.ylabel('Predicted Boost')
 plt.title('True vs. Predicted Boost for LeNet CNN (Validation Data)')
-plt.savefig(f"ValPredTrueLeNet.pdf")
+plt.savefig(f"ValPredTrueLeNetMass.pdf")
 
 # flattened_inputs_tracker = [item for sublist in inputs_tracker for item in sublist]
 # inputs_array = np.array(flattened_inputs_tracker, dtype=np.float32)
